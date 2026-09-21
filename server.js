@@ -1,4 +1,3 @@
-
 const express = require('express');
 const { Pool } = require('pg');
 const multer = require('multer');
@@ -61,7 +60,18 @@ async function migrate() {
       cliente_id TEXT, cliente_nome TEXT,
       criado_em TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS pedido_itens (
+      id TEXT PRIMARY KEY,
+      pedido_id TEXT NOT NULL,
+      produto_id TEXT,
+      linha TEXT, descricao TEXT, medidas TEXT, codigo TEXT,
+      preco NUMERIC, quantidade NUMERIC
+    );
   `);
+  // Alterações aditivas em tabelas já existentes (nunca removem dados)
+  await pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo TEXT;`);
+  await pool.query(`ALTER TABLE clientes ADD COLUMN IF NOT EXISTS alerta_dispensado_em TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();`);
   console.log('Migração concluída.');
 }
 
@@ -102,19 +112,27 @@ app.get('/api/clientes', requireAuth, async (req, res) => {
   try {
     const { rows: clientes } = await pool.query('SELECT * FROM clientes ORDER BY criado_em');
     const { rows: produtos } = await pool.query('SELECT * FROM produtos ORDER BY ordem');
-    const { rows: pedidos } = await pool.query('SELECT * FROM pedidos');
+    const { rows: pedidos } = await pool.query('SELECT * FROM pedidos ORDER BY data');
+    const { rows: itens } = await pool.query('SELECT * FROM pedido_itens');
     const { rows: anexos } = await pool.query('SELECT id, cliente_id, produto_id, nome, tipo, tamanho FROM anexos');
 
     const result = clientes.map((c) => ({
       id: c.id, nome: c.nome, empresa: c.empresa, telefone: c.telefone, email: c.email,
       endereco: c.endereco, cep: c.cep, cnpj: c.cnpj, inscricaoEstadual: c.inscricao_estadual,
       categoria: c.categoria, observacoes: c.observacoes,
+      alertaDispensadoEm: c.alerta_dispensado_em,
       produtos: produtos.filter((p) => p.cliente_id === c.id).map((p) => ({
         id: p.id, linha: p.linha, descricao: p.descricao, medidas: p.medidas, cores: p.cores,
-        impressao: p.impressao, preco: p.preco, quantidade: p.quantidade,
+        impressao: p.impressao, preco: p.preco, quantidade: p.quantidade, codigo: p.codigo,
         anexos: anexos.filter((a) => a.produto_id === p.id).map((a) => ({ id: a.id, nome: a.nome, tipo: a.tipo, tamanho: Number(a.tamanho) })),
       })),
-      pedidos: pedidos.filter((p) => p.cliente_id === c.id).map((p) => ({ id: p.id, data: p.data, descricao: p.descricao, valor: p.valor })),
+      pedidos: pedidos.filter((p) => p.cliente_id === c.id).map((p) => ({
+        id: p.id, data: p.data, descricao: p.descricao, valor: p.valor,
+        itens: itens.filter((i) => i.pedido_id === p.id).map((i) => ({
+          id: i.id, produtoId: i.produto_id, linha: i.linha, descricao: i.descricao,
+          medidas: i.medidas, codigo: i.codigo, preco: i.preco, quantidade: i.quantidade,
+        })),
+      })),
       orcamentos: anexos.filter((a) => a.cliente_id === c.id && !a.produto_id).map((a) => ({ id: a.id, nome: a.nome, tipo: a.tipo, tamanho: Number(a.tamanho) })),
     }));
     res.json(result);
@@ -148,17 +166,25 @@ app.post('/api/clientes', requireAuth, async (req, res) => {
     let ordem = 0;
     for (const p of incomingProdutos) {
       await client.query(
-        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         ON CONFLICT (id) DO UPDATE SET linha=$3, descricao=$4, medidas=$5, cores=$6, impressao=$7, preco=$8, quantidade=$9, ordem=$10`,
-        [p.id, c.id, p.linha || '', p.descricao || '', p.medidas || '', p.cores || '', p.impressao || '', p.preco || 0, p.quantidade || 0, ordem++]
+        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem, codigo)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (id) DO UPDATE SET linha=$3, descricao=$4, medidas=$5, cores=$6, impressao=$7, preco=$8, quantidade=$9, ordem=$10, codigo=$11`,
+        [p.id, c.id, p.linha || '', p.descricao || '', p.medidas || '', p.cores || '', p.impressao || '', p.preco || 0, p.quantidade || 0, ordem++, p.codigo || '']
       );
     }
 
-    await client.query('DELETE FROM pedidos WHERE cliente_id = $1', [c.id]);
-    for (const p of (c.pedidos || [])) {
+    const incomingPedidos = c.pedidos || [];
+    const incomingPedidoIds = incomingPedidos.map((p) => p.id);
+    const { rows: pedidosExistentes } = await client.query('SELECT id FROM pedidos WHERE cliente_id = $1', [c.id]);
+    const pedidoIdsRemover = pedidosExistentes.map((r) => r.id).filter((id) => !incomingPedidoIds.includes(id));
+    if (pedidoIdsRemover.length) {
+      await client.query('DELETE FROM pedido_itens WHERE pedido_id = ANY($1::text[])', [pedidoIdsRemover]);
+      await client.query('DELETE FROM pedidos WHERE id = ANY($1::text[])', [pedidoIdsRemover]);
+    }
+    for (const p of incomingPedidos) {
       await client.query(
-        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor) VALUES ($1,$2,$3,$4,$5)`,
+        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5`,
         [p.id, c.id, p.data || '', p.descricao || '', p.valor || 0]
       );
     }
@@ -184,6 +210,11 @@ app.delete('/api/clientes/:id', requireAuth, async (req, res) => {
     if (produtoIds.length) {
       await client.query('DELETE FROM anexos WHERE produto_id = ANY($1::text[])', [produtoIds]);
     }
+    const { rows: pedidosDoCliente } = await client.query('SELECT id FROM pedidos WHERE cliente_id = $1', [id]);
+    const pedidoIds = pedidosDoCliente.map((p) => p.id);
+    if (pedidoIds.length) {
+      await client.query('DELETE FROM pedido_itens WHERE pedido_id = ANY($1::text[])', [pedidoIds]);
+    }
     await client.query('DELETE FROM anexos WHERE cliente_id = $1', [id]);
     await client.query('DELETE FROM produtos WHERE cliente_id = $1', [id]);
     await client.query('DELETE FROM pedidos WHERE cliente_id = $1', [id]);
@@ -196,6 +227,109 @@ app.delete('/api/clientes/:id', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'erro ao excluir cliente' });
   } finally {
     client.release();
+  }
+});
+
+// ---------- pedidos estruturados (registro de compra com itens) ----------
+app.post('/api/pedidos', requireAuth, async (req, res) => {
+  const p = req.body || {};
+  if (!p.id || !p.clienteId || !p.data) return res.status(400).json({ error: 'id, clienteId e data são obrigatórios' });
+  const itens = p.itens || [];
+  const valor = itens.reduce((s, i) => s + (Number(i.preco) || 0) * (Number(i.quantidade) || 0), 0);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO pedidos (id, cliente_id, data, descricao, valor) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5`,
+      [p.id, p.clienteId, p.data, p.descricao || '', valor]
+    );
+    await client.query('DELETE FROM pedido_itens WHERE pedido_id = $1', [p.id]);
+    for (const i of itens) {
+      await client.query(
+        `INSERT INTO pedido_itens (id, pedido_id, produto_id, linha, descricao, medidas, codigo, preco, quantidade)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [i.id || crypto.randomUUID(), p.id, i.produtoId || null, i.linha || '', i.descricao || '', i.medidas || '', i.codigo || '', i.preco || 0, i.quantidade || 0]
+      );
+    }
+    // um novo pedido reabre o ciclo de alerta de recompra para esse cliente
+    await client.query('UPDATE clientes SET alerta_dispensado_em = NULL WHERE id = $1', [p.clienteId]);
+    await client.query('COMMIT');
+    res.json({ ok: true, valor });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error(e);
+    res.status(500).json({ error: 'erro ao salvar pedido' });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/pedidos/:id', requireAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM pedido_itens WHERE pedido_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM pedidos WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'erro ao excluir pedido' });
+  }
+});
+
+// ---------- oportunidades de recompra ----------
+app.get('/api/oportunidades', requireAuth, async (req, res) => {
+  try {
+    const { rows: clientes } = await pool.query('SELECT id, nome, empresa, telefone, alerta_dispensado_em FROM clientes');
+    const { rows: pedidos } = await pool.query('SELECT cliente_id, data FROM pedidos WHERE data IS NOT NULL AND data <> \'\' ORDER BY data');
+
+    const hoje = new Date();
+    const oportunidades = [];
+
+    for (const c of clientes) {
+      const datasCliente = pedidos.filter((p) => p.cliente_id === c.id).map((p) => new Date(p.data)).filter((d) => !isNaN(d));
+      if (datasCliente.length < 2) continue;
+      datasCliente.sort((a, b) => a - b);
+
+      const intervalos = [];
+      for (let i = 1; i < datasCliente.length; i++) {
+        intervalos.push((datasCliente[i] - datasCliente[i - 1]) / (1000 * 60 * 60 * 24));
+      }
+      const mediaDias = Math.round(intervalos.reduce((s, v) => s + v, 0) / intervalos.length);
+      const ultimoPedido = datasCliente[datasCliente.length - 1];
+      const previsao = new Date(ultimoPedido.getTime() + mediaDias * 24 * 60 * 60 * 1000);
+      const diasAtraso = Math.floor((hoje - previsao) / (1000 * 60 * 60 * 24));
+
+      const dispensadoEm = c.alerta_dispensado_em ? new Date(c.alerta_dispensado_em) : null;
+      const jaDispensado = dispensadoEm && dispensadoEm >= ultimoPedido;
+
+      if (diasAtraso >= 0 && !jaDispensado) {
+        oportunidades.push({
+          clienteId: c.id,
+          clienteNome: c.nome,
+          clienteEmpresa: c.empresa,
+          clienteTelefone: c.telefone,
+          ultimoPedidoData: ultimoPedido.toISOString().slice(0, 10),
+          mediaIntervaloDias: mediaDias,
+          previsaoData: previsao.toISOString().slice(0, 10),
+          diasAtraso,
+        });
+      }
+    }
+    oportunidades.sort((a, b) => b.diasAtraso - a.diasAtraso);
+    res.json(oportunidades);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'erro ao calcular oportunidades' });
+  }
+});
+
+app.post('/api/clientes/:id/dispensar-alerta', requireAuth, async (req, res) => {
+  try {
+    await pool.query('UPDATE clientes SET alerta_dispensado_em = now() WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'erro ao dispensar alerta' });
   }
 });
 
@@ -324,20 +458,22 @@ app.delete('/api/anexos/:id', requireAuth, async (req, res) => {
 // ---------- backup e restauração ----------
 app.get('/api/backup', requireAuth, async (req, res) => {
   try {
-    const [clientes, produtos, pedidos, prospectos, anexos, tarefas] = await Promise.all([
+    const [clientes, produtos, pedidos, pedidoItens, prospectos, anexos, tarefas] = await Promise.all([
       pool.query('SELECT * FROM clientes'),
       pool.query('SELECT * FROM produtos'),
       pool.query('SELECT * FROM pedidos'),
+      pool.query('SELECT * FROM pedido_itens'),
       pool.query('SELECT * FROM prospectos'),
       pool.query('SELECT id, cliente_id, produto_id, nome, tipo, tamanho, encode(dados, \'base64\') AS dados FROM anexos'),
       pool.query('SELECT * FROM tarefas'),
     ]);
     const backup = {
-      versao: 1,
+      versao: 2,
       geradoEm: new Date().toISOString(),
       clientes: clientes.rows,
       produtos: produtos.rows,
       pedidos: pedidos.rows,
+      pedidoItens: pedidoItens.rows,
       prospectos: prospectos.rows,
       anexos: anexos.rows,
       tarefas: tarefas.rows,
@@ -360,6 +496,7 @@ app.post('/api/restore', requireAuth, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query('DELETE FROM pedido_itens');
     await client.query('DELETE FROM anexos');
     await client.query('DELETE FROM pedidos');
     await client.query('DELETE FROM produtos');
@@ -369,22 +506,29 @@ app.post('/api/restore', requireAuth, async (req, res) => {
 
     for (const c of b.clientes) {
       await client.query(
-        `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [c.id, c.nome, c.empresa, c.telefone, c.email, c.endereco, c.cep, c.cnpj, c.inscricao_estadual, c.categoria, c.observacoes]
+        `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, alerta_dispensado_em)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [c.id, c.nome, c.empresa, c.telefone, c.email, c.endereco, c.cep, c.cnpj, c.inscricao_estadual, c.categoria, c.observacoes, c.alerta_dispensado_em || null]
       );
     }
     for (const p of (b.produtos || [])) {
       await client.query(
-        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [p.id, p.cliente_id, p.linha, p.descricao, p.medidas, p.cores, p.impressao, p.preco, p.quantidade, p.ordem || 0]
+        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem, codigo)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [p.id, p.cliente_id, p.linha, p.descricao, p.medidas, p.cores, p.impressao, p.preco, p.quantidade, p.ordem || 0, p.codigo || '']
       );
     }
     for (const p of (b.pedidos || [])) {
       await client.query(
         `INSERT INTO pedidos (id, cliente_id, data, descricao, valor) VALUES ($1,$2,$3,$4,$5)`,
         [p.id, p.cliente_id, p.data, p.descricao, p.valor]
+      );
+    }
+    for (const i of (b.pedidoItens || [])) {
+      await client.query(
+        `INSERT INTO pedido_itens (id, pedido_id, produto_id, linha, descricao, medidas, codigo, preco, quantidade)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [i.id, i.pedido_id, i.produto_id, i.linha, i.descricao, i.medidas, i.codigo, i.preco, i.quantidade]
       );
     }
     for (const p of (b.prospectos || [])) {
