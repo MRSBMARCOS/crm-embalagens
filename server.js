@@ -70,8 +70,17 @@ async function migrate() {
   `);
   // Alterações aditivas em tabelas já existentes (nunca removem dados)
   await pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo TEXT;`);
+  await pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS subtipo TEXT;`);
+  await pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS material TEXT;`);
+  await pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS condicao_pagamento TEXT;`);
   await pool.query(`ALTER TABLE clientes ADD COLUMN IF NOT EXISTS alerta_dispensado_em TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS linha TEXT;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS prazo_dias INT;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS prazo_tipo TEXT;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS data_prevista TEXT;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregue BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregue_em TIMESTAMPTZ;`);
   console.log('Migração concluída.');
 }
 
@@ -124,10 +133,13 @@ app.get('/api/clientes', requireAuth, async (req, res) => {
       produtos: produtos.filter((p) => p.cliente_id === c.id).map((p) => ({
         id: p.id, linha: p.linha, descricao: p.descricao, medidas: p.medidas, cores: p.cores,
         impressao: p.impressao, preco: p.preco, quantidade: p.quantidade, codigo: p.codigo,
+        subtipo: p.subtipo, material: p.material, condicaoPagamento: p.condicao_pagamento,
         anexos: anexos.filter((a) => a.produto_id === p.id).map((a) => ({ id: a.id, nome: a.nome, tipo: a.tipo, tamanho: Number(a.tamanho) })),
       })),
       pedidos: pedidos.filter((p) => p.cliente_id === c.id).map((p) => ({
         id: p.id, data: p.data, descricao: p.descricao, valor: p.valor,
+        linha: p.linha, prazoDias: p.prazo_dias, prazoTipo: p.prazo_tipo,
+        dataPrevista: p.data_prevista, entregue: p.entregue, entregueEm: p.entregue_em,
         itens: itens.filter((i) => i.pedido_id === p.id).map((i) => ({
           id: i.id, produtoId: i.produto_id, linha: i.linha, descricao: i.descricao,
           medidas: i.medidas, codigo: i.codigo, preco: i.preco, quantidade: i.quantidade,
@@ -166,10 +178,10 @@ app.post('/api/clientes', requireAuth, async (req, res) => {
     let ordem = 0;
     for (const p of incomingProdutos) {
       await client.query(
-        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem, codigo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (id) DO UPDATE SET linha=$3, descricao=$4, medidas=$5, cores=$6, impressao=$7, preco=$8, quantidade=$9, ordem=$10, codigo=$11`,
-        [p.id, c.id, p.linha || '', p.descricao || '', p.medidas || '', p.cores || '', p.impressao || '', p.preco || 0, p.quantidade || 0, ordem++, p.codigo || '']
+        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem, codigo, subtipo, material, condicao_pagamento)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (id) DO UPDATE SET linha=$3, descricao=$4, medidas=$5, cores=$6, impressao=$7, preco=$8, quantidade=$9, ordem=$10, codigo=$11, subtipo=$12, material=$13, condicao_pagamento=$14`,
+        [p.id, c.id, p.linha || '', p.descricao || '', p.medidas || '', p.cores || '', p.impressao || '', p.preco || 0, p.quantidade || 0, ordem++, p.codigo || '', p.subtipo || '', p.material || '', p.condicaoPagamento || '']
       );
     }
 
@@ -230,6 +242,29 @@ app.delete('/api/clientes/:id', requireAuth, async (req, res) => {
   }
 });
 
+// ---------- lançamento rápido de item (nova medida/referência num produto já existente) ----------
+app.post('/api/produtos', requireAuth, async (req, res) => {
+  const p = req.body || {};
+  if (!p.clienteId || !p.linha) return res.status(400).json({ error: 'clienteId e linha são obrigatórios' });
+  try {
+    const { rows } = await pool.query('SELECT COALESCE(MAX(ordem), 0) + 1 AS proxima FROM produtos WHERE cliente_id = $1', [p.clienteId]);
+    const id = p.id || crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem, codigo, subtipo, material, condicao_pagamento)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [id, p.clienteId, p.linha, p.descricao || '', p.medidas || '', p.cores || '', p.impressao || '', p.preco || 0, p.quantidade || 0, rows[0].proxima, p.codigo || '', p.subtipo || '', p.material || '', p.condicaoPagamento || '']
+    );
+    res.json({
+      id, linha: p.linha, descricao: p.descricao || '', medidas: p.medidas || '', cores: p.cores || '',
+      impressao: p.impressao || '', preco: p.preco || 0, quantidade: p.quantidade || 0, codigo: p.codigo || '',
+      subtipo: p.subtipo || '', material: p.material || '', condicaoPagamento: p.condicaoPagamento || '', anexos: [],
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'erro ao lançar item' });
+  }
+});
+
 // ---------- pedidos estruturados (registro de compra com itens) ----------
 app.post('/api/pedidos', requireAuth, async (req, res) => {
   const p = req.body || {};
@@ -240,9 +275,10 @@ app.post('/api/pedidos', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO pedidos (id, cliente_id, data, descricao, valor) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5`,
-      [p.id, p.clienteId, p.data, p.descricao || '', valor]
+      `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
+       ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5, linha=$6, prazo_dias=$7, prazo_tipo=$8, data_prevista=$9`,
+      [p.id, p.clienteId, p.data, p.descricao || '', valor, p.linha || '', p.prazoDias || null, p.prazoTipo || '', p.dataPrevista || '']
     );
     await client.query('DELETE FROM pedido_itens WHERE pedido_id = $1', [p.id]);
     for (const i of itens) {
@@ -262,6 +298,20 @@ app.post('/api/pedidos', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'erro ao salvar pedido' });
   } finally {
     client.release();
+  }
+});
+
+app.post('/api/pedidos/:id/entrega', requireAuth, async (req, res) => {
+  const { entregue } = req.body || {};
+  try {
+    await pool.query(
+      'UPDATE pedidos SET entregue = $1, entregue_em = CASE WHEN $1 THEN now() ELSE NULL END WHERE id = $2',
+      [!!entregue, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'erro ao atualizar status de entrega' });
   }
 });
 
@@ -513,15 +563,16 @@ app.post('/api/restore', requireAuth, async (req, res) => {
     }
     for (const p of (b.produtos || [])) {
       await client.query(
-        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem, codigo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [p.id, p.cliente_id, p.linha, p.descricao, p.medidas, p.cores, p.impressao, p.preco, p.quantidade, p.ordem || 0, p.codigo || '']
+        `INSERT INTO produtos (id, cliente_id, linha, descricao, medidas, cores, impressao, preco, quantidade, ordem, codigo, subtipo, material, condicao_pagamento)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [p.id, p.cliente_id, p.linha, p.descricao, p.medidas, p.cores, p.impressao, p.preco, p.quantidade, p.ordem || 0, p.codigo || '', p.subtipo || '', p.material || '', p.condicao_pagamento || '']
       );
     }
     for (const p of (b.pedidos || [])) {
       await client.query(
-        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor) VALUES ($1,$2,$3,$4,$5)`,
-        [p.id, p.cliente_id, p.data, p.descricao, p.valor]
+        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, entregue_em)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [p.id, p.cliente_id, p.data, p.descricao, p.valor, p.linha || '', p.prazo_dias || null, p.prazo_tipo || '', p.data_prevista || '', p.entregue || false, p.entregue_em || null]
       );
     }
     for (const i of (b.pedidoItens || [])) {
