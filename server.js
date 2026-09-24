@@ -265,7 +265,69 @@ app.post('/api/produtos', requireAuth, async (req, res) => {
   }
 });
 
-// ---------- pedidos estruturados (registro de compra com itens) ----------
+// ---------- importação inteligente: extrai dados de cliente a partir de um arquivo (PDF/imagem) ----------
+const EXTRACAO_MIMES = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const uploadExtracao = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
+app.post('/api/extrair-cliente', requireAuth, uploadExtracao.single('arquivo'), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'Nenhum arquivo recebido.' });
+  if (!EXTRACAO_MIMES.includes(file.mimetype)) {
+    return res.status(400).json({ error: 'Formato não suportado. Envie PDF, JPG, PNG ou WEBP.' });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: 'A extração automática ainda não foi configurada (falta a chave da API). Preencha manualmente por enquanto.' });
+  }
+
+  try {
+    const base64 = file.buffer.toString('base64');
+    const contentBlock = file.mimetype === 'application/pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+      : { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64 } };
+
+    const prompt = `Extraia os dados deste documento (orçamento, cadastro ou pedido de embalagens) e responda APENAS com um JSON válido, sem texto antes ou depois, sem markdown, exatamente neste formato:
+{"nome":"","empresa":"","telefone":"","email":"","cnpj":"","inscricaoEstadual":"","cep":"","endereco":"","produtos":[{"linha":"","descricao":"","medidas":"","cores":"","impressao":"","codigo":"","condicaoPagamento":"","preco":"","quantidade":""}]}
+Regras: "linha" deve ser uma destas quando identificável: "Caixas de papelão", "Embalagens gráficas", "Etiquetas adesivas" (ou string vazia). "preco" e "quantidade" somente números, sem símbolos. "impressao" deve ser "Sim" ou "Não" quando identificável. Se um campo não existir no documento, deixe como string vazia. Inclua um item em "produtos" para cada embalagem/produto diferente encontrado no documento.`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: [contentBlock, { type: 'text', text: prompt }] }],
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Erro da API Anthropic:', response.status, errText);
+      return res.status(502).json({ error: 'Falha ao consultar o serviço de extração. Tente novamente em instantes.' });
+    }
+
+    const data = await response.json();
+    const text = (data.content || []).map((b) => b.text || '').join('\n');
+    const limpo = text.replace(/```json|```/g, '').trim();
+    let extraido;
+    try {
+      extraido = JSON.parse(limpo);
+    } catch (parseErr) {
+      console.error('JSON inválido retornado pela IA:', limpo);
+      return res.status(502).json({ error: 'Não consegui interpretar os dados desse documento. Tente outro arquivo ou preencha manualmente.' });
+    }
+
+    res.json(extraido);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Erro ao processar o arquivo.' });
+  }
+});
+
+
 app.post('/api/pedidos', requireAuth, async (req, res) => {
   const p = req.body || {};
   if (!p.id || !p.clienteId || !p.data) return res.status(400).json({ error: 'id, clienteId e data são obrigatórios' });
