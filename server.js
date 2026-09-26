@@ -81,6 +81,7 @@ async function migrate() {
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS data_prevista TEXT;`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregue BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregue_em TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS empresa_grupo TEXT;`);
   console.log('Migração concluída.');
 }
 
@@ -139,7 +140,7 @@ app.get('/api/clientes', requireAuth, async (req, res) => {
       pedidos: pedidos.filter((p) => p.cliente_id === c.id).map((p) => ({
         id: p.id, data: p.data, descricao: p.descricao, valor: p.valor,
         linha: p.linha, prazoDias: p.prazo_dias, prazoTipo: p.prazo_tipo,
-        dataPrevista: p.data_prevista, entregue: p.entregue, entregueEm: p.entregue_em,
+        dataPrevista: p.data_prevista, entregue: p.entregue, entregueEm: p.entregue_em, empresaGrupo: p.empresa_grupo,
         itens: itens.filter((i) => i.pedido_id === p.id).map((i) => ({
           id: i.id, produtoId: i.produto_id, linha: i.linha, descricao: i.descricao,
           medidas: i.medidas, codigo: i.codigo, preco: i.preco, quantidade: i.quantidade,
@@ -337,10 +338,10 @@ app.post('/api/pedidos', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
-       ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5, linha=$6, prazo_dias=$7, prazo_tipo=$8, data_prevista=$9`,
-      [p.id, p.clienteId, p.data, p.descricao || '', valor, p.linha || '', p.prazoDias || null, p.prazoTipo || '', p.dataPrevista || '']
+      `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, empresa_grupo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10)
+       ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5, linha=$6, prazo_dias=$7, prazo_tipo=$8, data_prevista=$9, empresa_grupo=$10`,
+      [p.id, p.clienteId, p.data, p.descricao || '', valor, p.linha || '', p.prazoDias || null, p.prazoTipo || '', p.dataPrevista || '', p.empresaGrupo || '']
     );
     await client.query('DELETE FROM pedido_itens WHERE pedido_id = $1', [p.id]);
     for (const i of itens) {
@@ -632,9 +633,9 @@ app.post('/api/restore', requireAuth, async (req, res) => {
     }
     for (const p of (b.pedidos || [])) {
       await client.query(
-        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, entregue_em)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [p.id, p.cliente_id, p.data, p.descricao, p.valor, p.linha || '', p.prazo_dias || null, p.prazo_tipo || '', p.data_prevista || '', p.entregue || false, p.entregue_em || null]
+        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, entregue_em, empresa_grupo)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [p.id, p.cliente_id, p.data, p.descricao, p.valor, p.linha || '', p.prazo_dias || null, p.prazo_tipo || '', p.data_prevista || '', p.entregue || false, p.entregue_em || null, p.empresa_grupo || '']
       );
     }
     for (const i of (b.pedidoItens || [])) {
