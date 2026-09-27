@@ -690,8 +690,16 @@ app.use((err, req, res, next) => {
 });
 
 // ---------- frontend estático (single-file) ----------
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+// Cache-Control: no-store garante que o navegador sempre busca a versão mais nova
+// do arquivo no servidor, nunca uma cópia antiga guardada localmente.
+const enviarIndexSemCache = (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.sendFile(path.join(__dirname, 'index.html'));
+};
+app.get('/', enviarIndexSemCache);
+app.get(/^\/(?!api\/).*/, enviarIndexSemCache);
 
 migrate()
   .then(() => {
