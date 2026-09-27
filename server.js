@@ -76,6 +76,7 @@ async function migrate() {
   await pool.query(`ALTER TABLE clientes ADD COLUMN IF NOT EXISTS alerta_dispensado_em TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE clientes ADD COLUMN IF NOT EXISTS contato TEXT;`);
   await pool.query(`ALTER TABLE clientes ADD COLUMN IF NOT EXISTS local_entrega TEXT;`);
+  await pool.query(`ALTER TABLE clientes ADD COLUMN IF NOT EXISTS whatsapp TEXT;`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS linha TEXT;`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS prazo_dias INT;`);
@@ -133,7 +134,7 @@ app.get('/api/clientes', requireAuth, async (req, res) => {
       endereco: c.endereco, cep: c.cep, cnpj: c.cnpj, inscricaoEstadual: c.inscricao_estadual,
       categoria: c.categoria, observacoes: c.observacoes,
       alertaDispensadoEm: c.alerta_dispensado_em,
-      contato: c.contato, localEntrega: c.local_entrega,
+      contato: c.contato, localEntrega: c.local_entrega, whatsapp: c.whatsapp,
       produtos: produtos.filter((p) => p.cliente_id === c.id).map((p) => ({
         id: p.id, linha: p.linha, descricao: p.descricao, medidas: p.medidas, cores: p.cores,
         impressao: p.impressao, preco: p.preco, quantidade: p.quantidade, codigo: p.codigo,
@@ -165,10 +166,10 @@ app.post('/api/clientes', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, contato, local_entrega)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       ON CONFLICT (id) DO UPDATE SET nome=$2, empresa=$3, telefone=$4, email=$5, endereco=$6, cep=$7, cnpj=$8, inscricao_estadual=$9, categoria=$10, observacoes=$11, contato=$12, local_entrega=$13`,
-      [c.id, c.nome, c.empresa || '', c.telefone || '', c.email || '', c.endereco || '', c.cep || '', c.cnpj || '', c.inscricaoEstadual || '', c.categoria || '', c.observacoes || '', c.contato || '', c.localEntrega || '']
+      `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, contato, local_entrega, whatsapp)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (id) DO UPDATE SET nome=$2, empresa=$3, telefone=$4, email=$5, endereco=$6, cep=$7, cnpj=$8, inscricao_estadual=$9, categoria=$10, observacoes=$11, contato=$12, local_entrega=$13, whatsapp=$14`,
+      [c.id, c.nome, c.empresa || '', c.telefone || '', c.email || '', c.endereco || '', c.cep || '', c.cnpj || '', c.inscricaoEstadual || '', c.categoria || '', c.observacoes || '', c.contato || '', c.localEntrega || '', c.whatsapp || '']
     );
 
     const incomingProdutos = c.produtos || [];
@@ -622,9 +623,9 @@ app.post('/api/restore', requireAuth, async (req, res) => {
 
     for (const c of b.clientes) {
       await client.query(
-        `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, alerta_dispensado_em, contato, local_entrega)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-        [c.id, c.nome, c.empresa, c.telefone, c.email, c.endereco, c.cep, c.cnpj, c.inscricao_estadual, c.categoria, c.observacoes, c.alerta_dispensado_em || null, c.contato || '', c.local_entrega || '']
+        `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, alerta_dispensado_em, contato, local_entrega, whatsapp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [c.id, c.nome, c.empresa, c.telefone, c.email, c.endereco, c.cep, c.cnpj, c.inscricao_estadual, c.categoria, c.observacoes, c.alerta_dispensado_em || null, c.contato || '', c.local_entrega || '', c.whatsapp || '']
       );
     }
     for (const p of (b.produtos || [])) {
