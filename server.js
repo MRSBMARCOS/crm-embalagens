@@ -85,6 +85,12 @@ async function migrate() {
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregue BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entregue_em TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS empresa_grupo TEXT;`);
+  await pool.query(`ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cnpj2 TEXT;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS condicao_pagamento TEXT;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS observacao TEXT;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS excluido BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cnpj_faturado TEXT;`);
   console.log('Migração concluída.');
 }
 
@@ -131,7 +137,7 @@ app.get('/api/clientes', requireAuth, async (req, res) => {
 
     const result = clientes.map((c) => ({
       id: c.id, nome: c.nome, empresa: c.empresa, telefone: c.telefone, email: c.email,
-      endereco: c.endereco, cep: c.cep, cnpj: c.cnpj, inscricaoEstadual: c.inscricao_estadual,
+      endereco: c.endereco, cep: c.cep, cnpj: c.cnpj, cnpj2: c.cnpj2, inscricaoEstadual: c.inscricao_estadual,
       categoria: c.categoria, observacoes: c.observacoes,
       alertaDispensadoEm: c.alerta_dispensado_em,
       contato: c.contato, localEntrega: c.local_entrega, whatsapp: c.whatsapp,
@@ -145,6 +151,7 @@ app.get('/api/clientes', requireAuth, async (req, res) => {
         id: p.id, data: p.data, descricao: p.descricao, valor: p.valor,
         linha: p.linha, prazoDias: p.prazo_dias, prazoTipo: p.prazo_tipo,
         dataPrevista: p.data_prevista, entregue: p.entregue, entregueEm: p.entregue_em, empresaGrupo: p.empresa_grupo,
+        condicaoPagamento: p.condicao_pagamento, observacao: p.observacao, excluido: p.excluido, excluidoEm: p.excluido_em, cnpjFaturado: p.cnpj_faturado,
         itens: itens.filter((i) => i.pedido_id === p.id).map((i) => ({
           id: i.id, produtoId: i.produto_id, linha: i.linha, descricao: i.descricao,
           medidas: i.medidas, codigo: i.codigo, preco: i.preco, quantidade: i.quantidade,
@@ -166,10 +173,10 @@ app.post('/api/clientes', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, contato, local_entrega, whatsapp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-       ON CONFLICT (id) DO UPDATE SET nome=$2, empresa=$3, telefone=$4, email=$5, endereco=$6, cep=$7, cnpj=$8, inscricao_estadual=$9, categoria=$10, observacoes=$11, contato=$12, local_entrega=$13, whatsapp=$14`,
-      [c.id, c.nome, c.empresa || '', c.telefone || '', c.email || '', c.endereco || '', c.cep || '', c.cnpj || '', c.inscricaoEstadual || '', c.categoria || '', c.observacoes || '', c.contato || '', c.localEntrega || '', c.whatsapp || '']
+      `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, contato, local_entrega, whatsapp, cnpj2)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT (id) DO UPDATE SET nome=$2, empresa=$3, telefone=$4, email=$5, endereco=$6, cep=$7, cnpj=$8, inscricao_estadual=$9, categoria=$10, observacoes=$11, contato=$12, local_entrega=$13, whatsapp=$14, cnpj2=$15`,
+      [c.id, c.nome, c.empresa || '', c.telefone || '', c.email || '', c.endereco || '', c.cep || '', c.cnpj || '', c.inscricaoEstadual || '', c.categoria || '', c.observacoes || '', c.contato || '', c.localEntrega || '', c.whatsapp || '', c.cnpj2 || '']
     );
 
     const incomingProdutos = c.produtos || [];
@@ -342,10 +349,10 @@ app.post('/api/pedidos', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, empresa_grupo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10)
-       ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5, linha=$6, prazo_dias=$7, prazo_tipo=$8, data_prevista=$9, empresa_grupo=$10`,
-      [p.id, p.clienteId, p.data, p.descricao || '', valor, p.linha || '', p.prazoDias || null, p.prazoTipo || '', p.dataPrevista || '', p.empresaGrupo || '']
+      `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, empresa_grupo, condicao_pagamento, observacao, cnpj_faturado)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10,$11,$12,$13)
+       ON CONFLICT (id) DO UPDATE SET data=$3, descricao=$4, valor=$5, linha=$6, prazo_dias=$7, prazo_tipo=$8, data_prevista=$9, empresa_grupo=$10, condicao_pagamento=$11, observacao=$12, cnpj_faturado=$13`,
+      [p.id, p.clienteId, p.data, p.descricao || '', valor, p.linha || '', p.prazoDias || null, p.prazoTipo || '', p.dataPrevista || '', p.empresaGrupo || '', p.condicaoPagamento || '', p.observacao || '', p.cnpjFaturado || '']
     );
     await client.query('DELETE FROM pedido_itens WHERE pedido_id = $1', [p.id]);
     for (const i of itens) {
@@ -384,12 +391,21 @@ app.post('/api/pedidos/:id/entrega', requireAuth, async (req, res) => {
 
 app.delete('/api/pedidos/:id', requireAuth, async (req, res) => {
   try {
-    await pool.query('DELETE FROM pedido_itens WHERE pedido_id = $1', [req.params.id]);
-    await pool.query('DELETE FROM pedidos WHERE id = $1', [req.params.id]);
+    await pool.query('UPDATE pedidos SET excluido = true, excluido_em = now() WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'erro ao excluir pedido' });
+  }
+});
+
+app.post('/api/pedidos/:id/restaurar', requireAuth, async (req, res) => {
+  try {
+    await pool.query('UPDATE pedidos SET excluido = false, excluido_em = NULL WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'erro ao restaurar pedido' });
   }
 });
 
@@ -623,9 +639,9 @@ app.post('/api/restore', requireAuth, async (req, res) => {
 
     for (const c of b.clientes) {
       await client.query(
-        `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, alerta_dispensado_em, contato, local_entrega, whatsapp)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-        [c.id, c.nome, c.empresa, c.telefone, c.email, c.endereco, c.cep, c.cnpj, c.inscricao_estadual, c.categoria, c.observacoes, c.alerta_dispensado_em || null, c.contato || '', c.local_entrega || '', c.whatsapp || '']
+        `INSERT INTO clientes (id, nome, empresa, telefone, email, endereco, cep, cnpj, inscricao_estadual, categoria, observacoes, alerta_dispensado_em, contato, local_entrega, whatsapp, cnpj2)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        [c.id, c.nome, c.empresa, c.telefone, c.email, c.endereco, c.cep, c.cnpj, c.inscricao_estadual, c.categoria, c.observacoes, c.alerta_dispensado_em || null, c.contato || '', c.local_entrega || '', c.whatsapp || '', c.cnpj2 || '']
       );
     }
     for (const p of (b.produtos || [])) {
@@ -637,9 +653,9 @@ app.post('/api/restore', requireAuth, async (req, res) => {
     }
     for (const p of (b.pedidos || [])) {
       await client.query(
-        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, entregue_em, empresa_grupo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [p.id, p.cliente_id, p.data, p.descricao, p.valor, p.linha || '', p.prazo_dias || null, p.prazo_tipo || '', p.data_prevista || '', p.entregue || false, p.entregue_em || null, p.empresa_grupo || '']
+        `INSERT INTO pedidos (id, cliente_id, data, descricao, valor, linha, prazo_dias, prazo_tipo, data_prevista, entregue, entregue_em, empresa_grupo, condicao_pagamento, observacao, excluido, excluido_em, cnpj_faturado)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        [p.id, p.cliente_id, p.data, p.descricao, p.valor, p.linha || '', p.prazo_dias || null, p.prazo_tipo || '', p.data_prevista || '', p.entregue || false, p.entregue_em || null, p.empresa_grupo || '', p.condicao_pagamento || '', p.observacao || '', p.excluido || false, p.excluido_em || null, p.cnpj_faturado || '']
       );
     }
     for (const i of (b.pedidoItens || [])) {
