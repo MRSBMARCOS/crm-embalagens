@@ -172,7 +172,7 @@ let ns=Object.assign({},style);
 if(tag==="b"||tag==="strong")ns.bold=!0;
 if(tag==="u")ns.underline=!0;
 if(tag==="i"||tag==="em")ns.italic=!0;
-if(node.style&&node.style.color)ns.color=node.style.color;
+if(node.style&&node.style.color)ns.color=node.style.color;if(node.tagName&&node.tagName.toLowerCase()==="font"&&node.color)ns.color=node.color;
 if(node.style&&node.style.fontSize)ns.size=parseFloat(node.style.fontSize);
 if(node.style&&node.style.backgroundColor&&node.style.backgroundColor!=="transparent"&&node.style.backgroundColor!=="rgba(0, 0, 0, 0)")ns.hi=node.style.backgroundColor;
 if(tag==="br"){runs.push({brk:!0});return}
