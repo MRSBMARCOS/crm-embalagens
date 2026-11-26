@@ -268,6 +268,7 @@ a(ref.current.innerHTML)
 let aplicarTamanho=pt=>{
 if(!ref.current)return;
 ref.current.focus();
+restaurarSel();
 let sel=window.getSelection();
 if(!sel||!sel.rangeCount||sel.isCollapsed)return;
 let range=sel.getRangeAt(0);
@@ -288,7 +289,7 @@ let btnStyle={border:"1px solid #d7dde3",background:"#fff",borderRadius:6,paddin
 return (0,i.jsxs)("div",{style:{border:"1px solid #d7dde3",borderRadius:8,overflow:"hidden"},children:[
 (0,i.jsx)("style",{children:".obs-rica-edit:empty:before{content:attr(data-placeholder);color:#9aa5b1}"}),
 (0,i.jsxs)("div",{style:{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center",padding:"6px 8px",background:"#f4f6f8",borderBottom:"1px solid #d7dde3"},children:[
-(0,i.jsxs)("select",{onMouseDown:o=>o.preventDefault(),onChange:o=>{aplicarTamanho(Number(o.target.value));o.target.value=""},defaultValue:"",style:Object.assign({},btnStyle,{padding:"4px 4px"}),children:[
+(0,i.jsxs)("select",{onMouseDown:guardarSel,onChange:o=>{aplicarTamanho(Number(o.target.value));o.target.value=""},defaultValue:"",style:Object.assign({},btnStyle,{padding:"4px 4px"}),children:[
 (0,i.jsx)("option",{value:"",disabled:!0,children:"Tam."}),
 (0,i.jsx)("option",{value:"8",children:"8"}),
 (0,i.jsx)("option",{value:"9.5",children:"9.5"}),
