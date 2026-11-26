@@ -233,12 +233,25 @@ return curY
 function ObsRicaEditor(e){
 let t=e.value,a=e.onChange,l=e.placeholder;
 let ref=(0,j.useRef)(null);
+let gSel=(0,j.useRef)(null);
+let guardarSel=()=>{
+let s=window.getSelection();
+if(s&&s.rangeCount>0&&ref.current&&ref.current.contains(s.anchorNode)){gSel.current=s.getRangeAt(0).cloneRange()}
+};
+let restaurarSel=()=>{
+if(gSel.current){
+let s=window.getSelection();
+s.removeAllRanges();
+try{s.addRange(gSel.current)}catch(er){}
+}
+};
 (0,j.useEffect)(()=>{
 if(ref.current&&ref.current.innerHTML!==(t||"")){ref.current.innerHTML=t||""}
 },[t]);
 let exec=(cmd,val)=>{
 if(ref.current){
 ref.current.focus();
+restaurarSel();
 try{document.execCommand(cmd,!1,val)}catch(er){}
 a(ref.current.innerHTML)
 }
@@ -246,6 +259,7 @@ a(ref.current.innerHTML)
 let destacar=hex=>{
 if(!ref.current)return;
 ref.current.focus();
+restaurarSel();
 let ok=!1;
 try{ok=document.execCommand("hiliteColor",!1,hex)}catch(er){}
 if(!ok)try{document.execCommand("backColor",!1,hex)}catch(er){}
@@ -289,11 +303,11 @@ return (0,i.jsxs)("div",{style:{border:"1px solid #d7dde3",borderRadius:8,overfl
 (0,i.jsx)("button",{type:"button",title:"Sublinhado",onMouseDown:o=>o.preventDefault(),onClick:()=>exec("underline"),style:Object.assign({},btnStyle,{textDecoration:"underline"}),children:"S"}),
 (0,i.jsxs)("label",{title:"Cor do texto",style:Object.assign({},btnStyle,{display:"flex",alignItems:"center",gap:3,padding:"4px 6px"}),children:[
 "A",
-(0,i.jsx)("input",{type:"color",onChange:o=>exec("foreColor",o.target.value),defaultValue:"#1e1e1e",style:{width:16,height:16,border:"none",padding:0,cursor:"pointer"}})
+(0,i.jsx)("input",{type:"color",onMouseDown:guardarSel,onChange:o=>exec("foreColor",o.target.value),defaultValue:"#1e1e1e",style:{width:16,height:16,border:"none",padding:0,cursor:"pointer"}})
 ]}),
 (0,i.jsxs)("label",{title:"Destacar (marca-texto)",style:Object.assign({},btnStyle,{display:"flex",alignItems:"center",gap:3,padding:"4px 6px"}),children:[
 "\u270F",
-(0,i.jsx)("input",{type:"color",onChange:o=>destacar(o.target.value),defaultValue:"#fff59d",style:{width:16,height:16,border:"none",padding:0,cursor:"pointer"}})
+(0,i.jsx)("input",{type:"color",onMouseDown:guardarSel,onChange:o=>destacar(o.target.value),defaultValue:"#fff59d",style:{width:16,height:16,border:"none",padding:0,cursor:"pointer"}})
 ]}),
 (0,i.jsx)("button",{type:"button",title:"Limpar formata\xE7\xE3o",onMouseDown:o=>o.preventDefault(),onClick:()=>exec("removeFormat"),style:btnStyle,children:"Limpar"})
 ]}),
